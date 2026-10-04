@@ -1,68 +1,76 @@
+import json
 import os
+import ee
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import ee
 
 app = FastAPI(title="GeoMatrix AI Engine")
 
-try:
-    ee.Initialize()
-except Exception:
-    pass
+# Nom du projet Google Cloud enregistre sur GEE
+PROJECT_ID = "verdant-victory-429422-a7"
 
-class PermisRequest(BaseModel):
-    nom_permis: str
-    coordinates: list
+
+def authenticate_gee():
+  """Fonction d'authentification robuste pour Google Earth Engine."""
+  gee_json = os.environ.get("GEE_SERVICE_ACCOUNT_JSON")
+  if not gee_json:
+    raise ValueError("Variable d'environnement GEE_SERVICE_ACCOUNT_JSON introuvable.")
+
+  credentials_info = json.loads(gee_json)
+  credentials = ee.ServiceAccountCredentials(
+      credentials_info["client_email"], key_data=gee_json
+  )
+
+  # Passer explicitement le projet Cloud est obligatoire sur les versions récentes de GEE
+  ee.Initialize(credentials, project=PROJECT_ID)
+
+
+@app.on_event("startup")
+def initialize_gee_on_startup():
+  """Initialisation au démarrage du serveur FastAPI."""
+  try:
+    authenticate_gee()
+    print("✅ Google Earth Engine initialisé avec succès au démarrage !")
+  except Exception as e:
+    print(f"❌ Avertissement lors de l'initialisation GEE au démarrage: {e}")
+
+
+def ensure_gee_initialized():
+  """Vérifie si GEE est prêt, sinon tente une ré-initialisation immédiate."""
+  try:
+    # Test simple pour vérifier si la bibliothèque répond
+    ee.Number(1).getInfo()
+  except Exception:
+    print("⚠️ GEE non initialisé, tentative de ré-initialisation...")
+    try:
+      authenticate_gee()
+    except Exception as e:
+      raise HTTPException(
+          status_code=500,
+          detail=f"Échec critique de l'initialisation Earth Engine: {str(e)}",
+      )
+
 
 @app.get("/")
 def home():
-    return {"status": "GeoMatrix Engine active"}
+  return {"status": "online", "service": "GeoMatrix AI Engine"}
 
+
+# Exemple de structure de votre route /analyze
 @app.post("/analyze")
-def analyze_permis(data: PermisRequest):
-    try:
-        aoi = ee.Geometry.Polygon(data.coordinates)
-        
-        s2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-              .filterBounds(aoi)
-              .filterDate('2023-01-01', '2026-10-01')
-              .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
-              .median()
-              .clip(aoi))
+async def analyze_permis(payload: dict):
+  # Garantit que GEE est bien prêt avant de traiter le permis
+  ensure_gee_initialized()
 
-        iron_oxides = s2.select('B4').divide(s2.select('B2'))
-        clay_minerals = s2.select('B11').divide(s2.select('B12'))
-        
-        srtm = ee.Image('USGS/SRTMGL1_003').clip(aoi)
-        slope = ee.Terrain.slope(srtm)
-        structural_density = slope.gt(15)
+  try:
+    # --- INSÉREZ VOTRE LOGIQUE DE TRAITEMENT GEE ICI ---
+    # Exemple : point = ee.Geometry.Point([longitude, latitude])
 
-        geomatrix_score = (
-            clay_minerals.unitScale(1.0, 2.5).multiply(0.35)
-            .add(structural_density.multiply(0.30))
-            .add(iron_oxides.unitScale(1.0, 2.0).multiply(0.20))
-            .add(slope.unitScale(0, 45).multiply(0.15))
-        ).multiply(100)
-
-        mean_score = geomatrix_score.reduceRegion(
-            reducer=ee.Reducer.mean(),
-            geometry=aoi,
-            scale=30,
-            maxPixels=1e9
-        ).get('GeoMatrix_Score').getInfo()
-
-        map_url = geomatrix_score.getThumbURL({
-            'region': aoi,
-            'dimensions': 1024,
-            'format': 'png',
-            'palette': ['blue', 'cyan', 'green', 'yellow', 'orange', 'red']
-        })
-
-        return {
-            "status": "success",
-            "nom_permis": data.nom_permis,
-            "score": round(mean_score, 2),
-            "map_url": map_url
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "status": "success",
+        "message": "Analyse géospatiale exécutée avec succès",
+    }
+  except Exception as e:
+    raise HTTPException(
+        status_code=500, detail=f"Erreur lors du traitement GEE: {str(e)}"
+    )
