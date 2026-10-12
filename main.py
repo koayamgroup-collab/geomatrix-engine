@@ -1,47 +1,60 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, model_validator
-from typing import Optional, Union
+from fastapi import FastAPI, Request, HTTPException
+from pydantic import BaseModel
+from typing import Optional, Any
 
 app = FastAPI()
 
 class AnalysisRequest(BaseModel):
-    lat: Optional[Union[float, str]] = None
-    lng: Optional[Union[float, str]] = None
-
-    @model_validator(mode='before')
-    @classmethod
-    def parse_coords(cls, values):
-        if isinstance(values, dict):
-            # Récupère la valeur depuis "lat" ou un champ combiné équivalent
-            val = values.get("lat")
-            if isinstance(val, str) and "," in val:
-                parts = val.split(",")
-                try:
-                    values["lat"] = float(parts[0].strip())
-                    values["lng"] = float(parts[1].strip())
-                except ValueError:
-                    pass
-            # Si les deux valeurs sont passées séparément mais sous forme de chaînes
-            elif isinstance(values.get("lat"), str) and isinstance(values.get("lng"), str):
-                try:
-                    values["lat"] = float(values["lat"].strip())
-                    values["lng"] = float(values["lng"].strip())
-                except ValueError:
-                    pass
-        return values
+    lat: Optional[Any] = None
+    lng: Optional[Any] = None
+    geometry: Optional[Any] = None
+    Coordonnées_GPS: Optional[Any] = None
 
 @app.post("/analyze")
-def analyze_location(data: AnalysisRequest):
-    if data.lat is None or data.lng is None:
+async def analyze(request: Request):
+    # Récupération brute du corps de la requête pour analyse dans les logs
+    try:
+        body = await request.json()
+    except Exception:
+        body = await request.body()
+    
+    print(f"📦 Corps brut reçu de Make.com : {body}")
+
+    lat = None
+    lng = None
+
+    if isinstance(body, dict):
+        # Cherche dans les différents noms de champs possibles envoyés par Make
+        raw_lat = body.get("lat") or body.get("Coordonnées_GPS")
+        raw_lng = body.get("lng")
+
+        # Si les coordonnées sont combinées dans un seul champ (ex: "lat, lng")
+        if isinstance(raw_lat, str) and "," in raw_lat:
+            parts = raw_lat.split(",")
+            try:
+                lat = float(parts[0].strip())
+                lng = float(parts[1].strip())
+            except ValueError:
+                pass
+        elif raw_lat is not None and raw_lng is not None:
+            try:
+                lat = float(str(raw_lat).strip())
+                lng = float(str(raw_lng).strip())
+            except ValueError:
+                pass
+
+    print(f"🔍 Valeurs extraites -> lat={lat}, lng={lng}")
+
+    if lat is None or lng is None:
         raise HTTPException(
             status_code=400, 
-            detail="Géométrie ou coordonnées (lat/lng) manquantes dans la requête."
+            detail=f"Géométrie ou coordonnées (lat/lng) manquantes dans la requête. Corps reçu : {body}"
         )
-    
-    # Votre logique Google Earth Engine s'exécutera ici avec data.lat et data.lng
+
+    # Votre logique Google Earth Engine ici
     return {
         "status": "success",
-        "latitude": data.lat,
-        "longitude": data.lng,
+        "latitude": lat,
+        "longitude": lng,
         "message": "Analyse géologique effectuée avec succès."
     }
