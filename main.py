@@ -4,16 +4,24 @@ app = FastAPI()
 
 @app.post("/analyze")
 async def analyze(request: Request):
+    # Récupère soit le JSON, soit les paramètres d'URL, soit le corps brut
+    body = {}
     try:
         body = await request.json()
     except Exception:
-        body = {}
+        pass
+    
+    # Récupère aussi les query parameters si présents dans l'URL
+    query_params = dict(request.query_params)
+    
+    print(f"📦 Corps JSON reçu : {body}")
+    print(f"🔗 Paramètres URL reçus : {query_params}")
 
     lat = None
     lng = None
 
+    # 1. Recherche dans le JSON (corps)
     if isinstance(body, dict):
-        # Récupère depuis la liste "coordinates" si elle existe (ex: [47.9029, 1.9092])
         coords = body.get("coordinates")
         if isinstance(coords, list) and len(coords) >= 2:
             try:
@@ -22,7 +30,6 @@ async def analyze(request: Request):
             except ValueError:
                 pass
         
-        # Fallback si les champs lat/lng séparés sont présents
         if lat is None or lng is None:
             raw_lat = body.get("lat") or body.get("Coordonnées_GPS")
             raw_lng = body.get("lng")
@@ -40,13 +47,23 @@ async def analyze(request: Request):
                 except ValueError:
                     pass
 
+    # 2. Recherche dans les paramètres d'URL si toujours introuvable
+    if lat is None or lng is None:
+        raw_gps = query_params.get("Coordonnées_GPS") or query_params.get("lat")
+        if isinstance(raw_gps, str) and "," in raw_gps:
+            parts = raw_gps.split(",")
+            try:
+                lat = float(parts.get("lat") if isinstance(parts, dict) else parts[0].strip())
+                lng = float(parts[1].strip())
+            except ValueError:
+                pass
+
     if lat is None or lng is None:
         raise HTTPException(
             status_code=400, 
-            detail=f"Géométrie ou coordonnées (lat/lng) manquantes dans la requête. Corps reçu : {body}"
+            detail=f"Coordonnées introuvables. Reçu - JSON: {body} | URL: {query_params}"
         )
 
-    # Votre logique Google Earth Engine s'exécutera ici
     return {
         "status": "success",
         "latitude": lat,
