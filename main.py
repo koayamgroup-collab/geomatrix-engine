@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 
-# Initialisation sécurisée de Google Earth Engine via la variable d'environnement
+# Initialisation de Google Earth Engine
 try:
     creds_json = os.environ.get("GEE_CREDENTIALS")
     if creds_json:
@@ -29,7 +29,7 @@ async def analyze(request: Request):
 
     lat, lng = None, None
 
-    # Extraction robuste des coordonnées quel que soit le format envoyé par Make.com
+    # Extraction des coordonnées
     if isinstance(body, dict):
         coords = body.get("coordinates")
         if isinstance(coords, list) and len(coords) >= 2:
@@ -59,32 +59,53 @@ async def analyze(request: Request):
             detail=f"Coordonnées (lat/lng) introuvables. Corps reçu : {body}"
         )
 
-    # --- LOGIQUE GOOGLE EARTH ENGINE ---
+    # --- LOGIQUE GOOGLE EARTH ENGINE (Élévation + NDVI) ---
+    elevation = 0
+    ndvi_value = 0.0
+    geological_score = 0.0
+
     try:
         point = ee.Geometry.Point([lng, lat])
-        
-        # Exemple : Récupération de l'élévation (SRTM DEM 30m)
+        region = point.buffer(100) # Zone d'analyse de 100 mètres autour du point
+
+        # 1. Élévation (SRTM DEM)
         dem = ee.Image('USGS/SRTMGL1_03')
         elevation = dem.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=point,
             scale=30
-        ).getInfo().get('elevation', 0)
+        ).getInfo().get('elevation', 0) or 0
 
-        # Calcul d'une métrique géologique de test basée sur l'élévation
-        geological_score = round((elevation * 0.05) + 12.4, 2)
+        # 2. Indice NDVI (Sentinel-2 Surface Reflectance)
+        # Bandes: B8 (Infrarouge Proche - NIR), B4 (Rouge)
+        s2 = ee.ImageCollection('COPERNICUS/S2_SR') \
+            .filterBounds(region) \
+            .filterDate('2025-01-01', '2026-12-31') \
+            .sort('CLOUDY_PIXEL_PERCENTAGE') \
+            .first()
+        
+        if s2:
+            ndvi_image = s2.normalizedDifference(['B8', 'B4']).rename('NDVI')
+            ndvi_dict = ndvi_image.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=region,
+                scale=10
+            ).getInfo()
+            ndvi_value = round(ndvi_dict.get('NDVI', 0.0) or 0.0, 4)
+
+        # 3. Score géologique / environnemental combiné
+        geological_score = round((elevation * 0.02) + (ndvi_value * 15.0) + 10.0, 2)
 
     except Exception as e:
-        elevation = 0
-        geological_score = 0.0
         print(f"⚠️ Erreur d'exécution GEE : {e}")
 
-    # Retour des données structurées pour le 3ème module Airtable
+    # Retour des données structurées pour Airtable
     return {
         "status": "success",
         "latitude": lat,
         "longitude": lng,
-        "elevation_m": elevation,
+        "elevation_m": round(elevation, 2),
+        "ndvi": ndvi_value,
         "geological_score": geological_score,
-        "message": "Analyse géologique GEE effectuée avec succès."
+        "message": "Analyse géologique et NDVI effectuée avec succès."
     }
