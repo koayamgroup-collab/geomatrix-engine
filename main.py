@@ -1,23 +1,49 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 
 app = FastAPI()
 
 @app.post("/analyze")
-def analyze(lat: float = None, lng: float = None, Coordonnées_GPS: str = None):
-    # Si les coordonnées sont envoyées sous forme de chaîne combinée "lat, lng" depuis Airtable
-    if Coordonnées_GPS and "," in Coordonnées_GPS:
-        parts = Coordonnées_GPS.split(",")
-        try:
-            lat = float(parts[0].strip())
-            lng = float(parts[1].strip())
-        except ValueError:
-            pass
+async def analyze(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
 
-    # Vérification finale
+    lat = None
+    lng = None
+
+    if isinstance(body, dict):
+        # Récupère depuis la liste "coordinates" si elle existe (ex: [47.9029, 1.9092])
+        coords = body.get("coordinates")
+        if isinstance(coords, list) and len(coords) >= 2:
+            try:
+                lat = float(coords[0])
+                lng = float(coords[1])
+            except ValueError:
+                pass
+        
+        # Fallback si les champs lat/lng séparés sont présents
+        if lat is None or lng is None:
+            raw_lat = body.get("lat") or body.get("Coordonnées_GPS")
+            raw_lng = body.get("lng")
+            if isinstance(raw_lat, str) and "," in raw_lat:
+                parts = raw_lat.split(",")
+                try:
+                    lat = float(parts[0].strip())
+                    lng = float(parts[1].strip())
+                except ValueError:
+                    pass
+            elif raw_lat is not None and raw_lng is not None:
+                try:
+                    lat = float(raw_lat)
+                    lng = float(raw_lng)
+                except ValueError:
+                    pass
+
     if lat is None or lng is None:
         raise HTTPException(
             status_code=400, 
-            detail="Géométrie ou coordonnées (lat/lng) manquantes dans la requête."
+            detail=f"Géométrie ou coordonnées (lat/lng) manquantes dans la requête. Corps reçu : {body}"
         )
 
     # Votre logique Google Earth Engine s'exécutera ici
